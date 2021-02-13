@@ -1,0 +1,40 @@
+# Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+AWSTemplateFormatVersion: 2010-09-09
+Description: Create front & api ALB
+
+Parameters:
+  PJPrefix:
+    Type: String
+
+  TagSuffix:
+    Type: String
+    Default: "cfn-create"
+
+Resources:
+  ProductionCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      CapacityProviders: ['FARGATE', 'FARGATE_SPOT']
+      Tags:
+        - Key: Name
+          Value: !Sub "${PJPrefix}-${TagSuffix}-production"
+
+  StgCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      CapacityProviders: ['FARGATE', 'FARGATE_SPOT']
+      Tags:
+        - Key: Name
+          Value: !Sub "${PJPrefix}-${TagSuffix}-stg"
+
+Outputs:
+  ProductionClusterId:
+    Value: !Ref ProductionCluster
+    Export:
+      Name: !Sub ${AWS::StackName}-ProductionClusterId
+
+  StgClusterId:
+    Value: !Ref StgCluster
+    Export:
+      Name: !Sub ${AWS::StackName}-StgClusterId

@@ -1,0 +1,25 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: 
+  DNS Create
+
+Parameters:
+  PJPrefix:
+    Type: String
+
+  TagSuffix:
+    Type: String
+    Default: "cfn-create"
+
+  HostZone:
+    Type: String
+
+Resources: 
+  DNS:
+    Type: "AWS::Route53::HostedZone"
+    Properties:
+      HostedZoneConfig:
+        Comment: !Sub "${PJPrefix}-${TagSuffix}"
+      Name: !Ref HostZone
+      HostedZoneTags:
+        - Key: Name
+          Value: !Sub "${PJPrefix}-${TagSuffix}"

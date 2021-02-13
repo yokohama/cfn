@@ -1,0 +1,191 @@
+# Copyright Amazon.com Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+AWSTemplateFormatVersion: 2010-09-09
+Description: Create front production ECS.
+
+Parameters:
+  PJPrefix:
+    Type: String
+
+  TagSuffix:
+    Type: String
+    Default: "cfn-create"
+
+  AppName:
+    Type: String
+    Default: 'front'
+
+  EnvName:
+    Type: String
+    Default: 'production'
+
+  ContainerImage:
+    Type: String
+    Default: 'hoge'
+
+  PublicSubnet1:
+    Type: String
+
+  PublicSubnet2:
+    Type: String
+
+  EnvironmentSecurityGroup:
+    Type: String
+
+  ProductionClusterId:
+    Type: String
+
+  TargetGroup:
+    Type: String
+
+Resources:
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Join ['', [/cfn-create/, !Ref AppName, '-', !Ref EnvName, '-', !Ref PJPrefix]]
+      RetentionInDays: 1
+
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: !Join ['', [!Ref AppName, '-', !Ref EnvName, '-', !Ref PJPrefix, SecretsPolicy]]
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Allow'
+                Action:
+                  - 'ssm:GetParameters'
+                Resource:
+                  - !Sub 'arn:aws:ssm:${AWS::Region}:${AWS::AccountId}:parameter/*'
+              - Effect: 'Allow'
+                Action:
+                  - 'secretsmanager:GetSecretValue'
+                Resource:
+                  - !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:*'
+              - Effect: 'Allow'
+                Action:
+                  - 'kms:Decrypt'
+                Resource:
+                  - !Sub 'arn:aws:kms:${AWS::Region}:${AWS::AccountId}:key/*'
+      ManagedPolicyArns:
+        - 'arn:aws:iam::aws:policy/service-role/AmazonECSTaskExecutionRolePolicy'
+
+  TaskRole:
+    # An IAM role to control permissions for the containers in your tasks
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ecs-tasks.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Policies:
+        - PolicyName: 'DenyIAMExceptTaggedRoles'
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: 'Deny'
+                Action: 'iam:*'
+                Resource: '*'
+              - Effect: 'Allow'
+                Action: 'sts:AssumeRole'
+                Resource:
+                  - !Sub 'arn:aws:iam::${AWS::AccountId}:role/*'
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    DependsOn: LogGroup
+    Properties:
+      Family: !Join ['', [!Ref AppName, '-', !Ref EnvName, '-', !Ref PJPrefix]]
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+        - FARGATE
+      Cpu: 256
+      Memory: 512
+      ExecutionRoleArn: !Ref ExecutionRole
+      TaskRoleArn: !Ref TaskRole
+      ContainerDefinitions:
+        - Name: !Ref PJPrefix
+          Image: !Ref ContainerImage
+          PortMappings:
+            - ContainerPort: 80
+          Environment:
+          - Name: CFN_CREATE_APPLICATION_NAME
+            Value: !Sub '${AppName}'
+          - Name: CFN_CREATE_SERVICE_DISCOVERY_ENDPOINT
+            Value: !Sub '${AppName}.local'
+          - Name: CFN_CREATE_ENVIRONMENT_NAME
+            Value: !Sub '${EnvName}'
+          - Name: CFN_CREATE_SERVICE_NAME
+            Value: !Sub '${PJPrefix}'
+          - Name: NODE_ENV
+            Value: !Ref EnvName
+          
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-region: !Ref AWS::Region
+              awslogs-group: !Ref LogGroup
+              awslogs-stream-prefix: cfn-create
+      Tags:
+        - Key: Name
+          Value: !Sub "${PJPrefix}-${TagSuffix}-front-production"
+
+  Service:
+    # An ECS service to run and maintain your tasks in the environment cluster
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster: !Ref ProductionClusterId
+      TaskDefinition: !Ref TaskDefinition
+      DesiredCount: 0
+      DeploymentConfiguration:
+        DeploymentCircuitBreaker:
+          Enable: true
+          Rollback: true
+        MinimumHealthyPercent: 100
+        MaximumPercent: 200
+      PropagateTags: SERVICE
+      LaunchType: FARGATE
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: ENABLED
+          Subnets:
+            - !Ref PublicSubnet1
+            - !Ref PublicSubnet2
+          SecurityGroups: 
+            - !Ref EnvironmentSecurityGroup
+      # This may need to be adjusted if the container takes a while to start up
+      HealthCheckGracePeriodSeconds: 60
+      LoadBalancers:
+        - ContainerName: !Ref PJPrefix
+          ContainerPort: 80
+          TargetGroupArn: !Ref TargetGroup
+      Tags:
+        - Key: Name
+          Value: !Sub "${PJPrefix}-${TagSuffix}-front-production"
+
+          #TargetGroup:
+          #  # A target group to connect the load balancer to your service
+          #  Type: AWS::ElasticLoadBalancingV2::TargetGroup
+          #  Properties:
+          #    HealthCheckPath: / # Default is '/'.
+          #    Port: 80
+          #    Protocol: HTTP
+          #    TargetGroupAttributes:
+          #      - Key: deregistration_delay.timeout_seconds
+          #        Value: 60                  # Default is 300.
+          #      - Key: stickiness.enabled
+          #        Value: false
+          #    TargetType: ip
+          #    VpcId: !Ref VPC
+          #    Tags:
+          #      - Key: Name
+          #        Value: !Sub "${PJPrefix}-${TagSuffix}-front-production"

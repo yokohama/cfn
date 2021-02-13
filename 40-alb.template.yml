@@ -1,0 +1,217 @@
+# Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+AWSTemplateFormatVersion: 2010-09-09
+Description: Create front & api ALB
+
+Parameters:
+  PJPrefix:
+    Type: String
+
+  TagSuffix:
+    Type: String
+    Default: "cfn-create"
+
+  VPC:
+    Type: String
+
+  PublicLoadBalancerSecurityGroup:
+    Type: String
+
+  EnvironmentSecurityGroup:
+    Type: String
+
+  PublicSubnet1:
+    Type: String
+
+  PublicSubnet2:
+    Type: String
+
+Resources:
+  EnvironmentSecurityGroupIngressFromPublicALB:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Ingress from the public ALB
+      GroupId: !Ref EnvironmentSecurityGroup
+      IpProtocol: -1
+      SourceSecurityGroupId: !Ref PublicLoadBalancerSecurityGroup
+
+  EnvironmentSecurityGroupIngressFromSelf:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Ingress from other containers in the same security group
+      GroupId: !Ref EnvironmentSecurityGroup
+      IpProtocol: -1
+      SourceSecurityGroupId: !Ref EnvironmentSecurityGroup
+
+  FrontProductionPublicLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${PJPrefix}-${TagSuffix}-front"
+      Scheme: internet-facing
+      SecurityGroups: 
+        - !Ref PublicLoadBalancerSecurityGroup
+      Subnets: [ !Ref PublicSubnet1, !Ref PublicSubnet2, ]
+      Type: application
+      Tags:
+        - Key: Name
+          Value: !Sub "${PJPrefix}-${TagSuffix}-front-production"
+
+  ApiProductionPublicLoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Sub "${PJPrefix}-${TagSuffix}-api"
+      Scheme: internet-facing
+      SecurityGroups: 
+        - !Ref PublicLoadBalancerSecurityGroup
+      Subnets: [ !Ref PublicSubnet1, !Ref PublicSubnet2, ]
+      Type: application
+      Tags:
+        - Key: Name
+          Value: !Sub "${PJPrefix}-${TagSuffix}-api-production"
+
+  FrontProductionDefaultHTTPTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      #  Check if your application is healthy within 20 = 10*2 seconds, compared to 2.5 mins = 30*5 seconds.
+      HealthCheckIntervalSeconds: 10 # Default is 30.
+      HealthyThresholdCount: 2       # Default is 5.
+      HealthCheckTimeoutSeconds: 5
+      HealthCheckPath: / # Default is '/'.
+      Port: 80
+      Protocol: HTTP
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: 60                  # Default is 300.
+      TargetType: ip
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${PJPrefix}-${TagSuffix}-front-production"
+
+  ApiProductionDefaultHTTPTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      #  Check if your application is healthy within 20 = 10*2 seconds, compared to 2.5 mins = 30*5 seconds.
+      HealthCheckIntervalSeconds: 10 # Default is 30.
+      HealthyThresholdCount: 2       # Default is 5.
+      HealthCheckTimeoutSeconds: 5
+      HealthCheckPath: / # Default is '/'.
+      Port: 80
+      Protocol: HTTP
+      TargetGroupAttributes:
+        - Key: deregistration_delay.timeout_seconds
+          Value: 60                  # Default is 300.
+      TargetType: ip
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${PJPrefix}-${TagSuffix}-api-production"
+
+  FrontProductionHTTPListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - TargetGroupArn: !Ref FrontProductionDefaultHTTPTargetGroup
+          Type: forward
+      LoadBalancerArn: !Ref FrontProductionPublicLoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+      #FrontProductionHTTPSListener:
+      #  Type: AWS::ElasticLoadBalancingV2::Listener
+      #  DependsOn: HTTPSCert
+      #  Properties:
+      #    Certificates:
+      #      - CertificateArn: !Ref HTTPSCert
+      #    DefaultActions:
+      #      - TargetGroupArn: !Ref FrontProductionDefaultHTTPTargetGroup
+      #        Type: forward
+      #    LoadBalancerArn: !Ref FrontProductionPublicLoadBalancer
+      #    Port: 443
+      #    Protocol: HTTPS
+      #
+  ApiProductionHTTPListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - TargetGroupArn: !Ref ApiProductionDefaultHTTPTargetGroup
+          Type: forward
+      LoadBalancerArn: !Ref ApiProductionPublicLoadBalancer
+      Port: 80
+      Protocol: HTTP
+
+      #ApiProductionHTTPSListener:
+      #  Type: AWS::ElasticLoadBalancingV2::Listener
+      #  DependsOn: HTTPSCert
+      #  Properties:
+      #    Certificates:
+      #      - CertificateArn: !Ref HTTPSCert
+      #    DefaultActions:
+      #      - TargetGroupArn: !Ref ApiProductionDefaultHTTPTargetGroup
+      #        Type: forward
+      #    LoadBalancerArn: !Ref APiProductionPublicLoadBalancer
+      #    Port: 443
+      #    Protocol: HTTPS
+
+Outputs:
+  FrontProductionPublicLoadBalancerDNSName:
+    Value: !GetAtt FrontProductionPublicLoadBalancer.DNSName
+    Export:
+      Name: !Sub ${AWS::StackName}-FrontProductionPublicLoadBalancerDNS
+
+  ApiProductionPublicLoadBalancerDNSName:
+    Value: !GetAtt ApiProductionPublicLoadBalancer.DNSName
+    Export:
+      Name: !Sub ${AWS::StackName}-ApiProductionPublicLoadBalancerDNS
+
+  FrontProductionPublicLoadBalancerFullName:
+    Value: !GetAtt FrontProductionPublicLoadBalancer.LoadBalancerFullName
+    Export:
+      Name: !Sub ${AWS::StackName}-FrontProductionPublicLoadBalancerFullName
+
+  ApiProductionPublicLoadBalancerFullName:
+    Value: !GetAtt ApiProductionPublicLoadBalancer.LoadBalancerFullName
+    Export:
+      Name: !Sub ${AWS::StackName}-ApiProductionPublicLoadBalancerFullName
+
+  FrontProductionPublicLoadBalancerHostedZone:
+    Value: !GetAtt FrontProductionPublicLoadBalancer.CanonicalHostedZoneID
+    Export:
+      Name: !Sub ${AWS::StackName}-FrontProductionCanonicalHostedZoneID
+
+  ApiProductionPublicLoadBalancerHostedZone:
+    Value: !GetAtt ApiProductionPublicLoadBalancer.CanonicalHostedZoneID
+    Export:
+      Name: !Sub ${AWS::StackName}-ApiProductionCanonicalHostedZoneID
+
+  FrontProductionHTTPListenerArn:
+    Value: !Ref FrontProductionHTTPListener
+    Export:
+      Name: !Sub ${AWS::StackName}-FrontProductionHTTPListenerArn
+
+  ApiProductionHTTPListenerArn:
+    Value: !Ref ApiProductionHTTPListener
+    Export:
+      Name: !Sub ${AWS::StackName}-ApiProductionHTTPListenerArn
+
+      #FrontProductionHTTPSListenerArn:
+      #  Condition: ExportHTTPSListener
+      #  Value: !Ref HTTPSListener
+      #  Export:
+      #    Name: !Sub ${AWS::StackName}-FrontProductionHTTPSListenerArn
+      
+      #ApiProductionHTTPSListenerArn:
+      #  Condition: ExportHTTPSListener
+      #  Value: !Ref HTTPSListener
+      #  Export:
+      #    Name: !Sub ${AWS::StackName}-ApiProductionHTTPSListenerArn
+
+  FrontProductionDefaultHTTPTargetGroupArn:
+    Value: !Ref FrontProductionDefaultHTTPTargetGroup
+    Export:
+      Name: !Sub ${AWS::StackName}-FrontProductionDefaultHTTPTargetGroup
+
+  ApiProductionDefaultHTTPTargetGroupArn:
+    Value: !Ref ApiProductionDefaultHTTPTargetGroup
+    Export:
+      Name: !Sub ${AWS::StackName}-ApiProductionDefaultHTTPTargetGroup

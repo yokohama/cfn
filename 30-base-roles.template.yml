@@ -1,0 +1,456 @@
+# Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+AWSTemplateFormatVersion: 2010-09-09
+Description: Configure base roles & SecurityGroups
+
+Parameters:
+  PJPrefix:
+    Type: String
+
+  TagSuffix:
+    Type: String
+    Default: "cfn-create"
+
+  VPC:
+    Type: String
+
+Resources:
+  AdministrationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${PJPrefix}-adminrole"
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: AssumeRole-AWSCloudFormationStackSetExecutionRole
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sts:AssumeRole
+                Resource:
+                  - !Sub 'arn:aws:iam::*:role/${PJPrefix}-adminrole'
+  ExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${PJPrefix}-executionrole"
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              AWS: !GetAtt AdministrationRole.Arn
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Policies:
+      - PolicyName: ExecutionRolePolicy
+        PolicyDocument:
+          Version: "2012-10-17"
+          Statement:
+              - Sid: StackSetRequiredPermissions
+                Effect: Allow
+                Action:
+                  - cloudformation:*
+                  - s3:*
+                  - sns:*
+                Resource: "*"
+              - Sid: ManageKMSKeys
+                Effect: Allow
+                Action:
+                  - kms:*
+                Resource: "*"
+              - Sid: ManageECRRepos
+                Effect: Allow
+                Action:
+                  - ecr:DescribeImageScanFindings
+                  - ecr:GetLifecyclePolicyPreview
+                  - ecr:CreateRepository
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:GetAuthorizationToken
+                  - ecr:ListTagsForResource
+                  - ecr:ListImages
+                  - ecr:DeleteLifecyclePolicy
+                  - ecr:DeleteRepository
+                  - ecr:SetRepositoryPolicy
+                  - ecr:BatchGetImage
+                  - ecr:DescribeImages
+                  - ecr:DescribeRepositories
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetRepositoryPolicy
+                  - ecr:GetLifecyclePolicy
+                  - ecr:TagResource
+                Resource: "*"
+
+  PublicLoadBalancerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Access to the public facing load balancer
+      SecurityGroupIngress:
+        - CidrIp: 0.0.0.0/0
+          Description: Allow from anyone on port 80
+          FromPort: 80
+          IpProtocol: tcp
+          ToPort: 80
+        - CidrIp: 0.0.0.0/0
+          Description: Allow from anyone on port 443
+          FromPort: 443
+          IpProtocol: tcp
+          ToPort: 443
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${PJPrefix}-${TagSuffix}"
+
+  EnvironmentSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Join ['', [!Ref PJPrefix, '-', !Ref TagSuffix, EnvironmentSecurityGroup]]
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub "${PJPrefix}-${TagSuffix}"
+
+  EnvironmentSecurityGroupIngressFromPublicALB:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Ingress from the public ALB
+      GroupId: !Ref EnvironmentSecurityGroup
+      IpProtocol: -1
+      SourceSecurityGroupId: !Ref PublicLoadBalancerSecurityGroup
+
+  EnvironmentSecurityGroupIngressFromSelf:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      Description: Ingress from other containers in the same security group
+      GroupId: !Ref EnvironmentSecurityGroup
+      IpProtocol: -1
+      SourceSecurityGroupId: !Ref EnvironmentSecurityGroup
+
+  CloudformationExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AWS::StackName}-CFNExecutionRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - 'cloudformation.amazonaws.com'
+            - 'lambda.amazonaws.com'
+          Action: sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: executeCfn
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+            -
+              Effect: Allow
+              NotAction:
+                - 'organizations:*'
+                - 'account:*'
+              Resource: '*'
+            -
+              Effect: Allow
+              Action:
+                - 'organizations:DescribeOrganization'
+                - 'account:ListRegions'
+              Resource: '*'
+  
+  EnvironmentManagerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${AWS::StackName}-EnvManagerRole
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+          Action: sts:AssumeRole
+      Path: /
+      Policies:
+      - PolicyName: root
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Sid: CloudwatchLogs
+            Effect: Allow
+            Action: [
+              "logs:GetLogRecord",
+              "logs:GetQueryResults",
+              "logs:StartQuery",
+              "logs:GetLogEvents",
+              "logs:DescribeLogStreams",
+              "logs:StopQuery",
+              "logs:TestMetricFilter",
+              "logs:FilterLogEvents",
+              "logs:GetLogGroupFields",
+              "logs:GetLogDelivery"
+            ]
+            Resource: "*"
+          - Sid: Cloudwatch
+            Effect: Allow
+            Action: [
+              "cloudwatch:DescribeAlarms"
+            ]
+            Resource: "*"
+          - Sid: ECS
+            Effect: Allow
+            Action: [
+              "ecs:ListAttributes",
+              "ecs:ListTasks",
+              "ecs:DescribeServices",
+              "ecs:DescribeTaskSets",
+              "ecs:ListContainerInstances",
+              "ecs:DescribeContainerInstances",
+              "ecs:DescribeTasks",
+              "ecs:DescribeClusters",
+              "ecs:UpdateService",
+              "ecs:PutAttributes",
+              "ecs:StartTelemetrySession",
+              "ecs:StartTask",
+              "ecs:StopTask",
+              "ecs:ListServices",
+              "ecs:ListTaskDefinitionFamilies",
+              "ecs:DescribeTaskDefinition",
+              "ecs:ListTaskDefinitions",
+              "ecs:ListClusters",
+              "ecs:RunTask"
+            ]
+            Resource: "*"
+          - Sid: CloudFormation
+            Effect: Allow
+            Action: [
+              "cloudformation:CancelUpdateStack",
+              "cloudformation:CreateChangeSet",
+              "cloudformation:CreateStack",
+              "cloudformation:DeleteChangeSet",
+              "cloudformation:DeleteStack",
+              "cloudformation:Describe*",
+              "cloudformation:DetectStackDrift",
+              "cloudformation:DetectStackResourceDrift",
+              "cloudformation:ExecuteChangeSet",
+              "cloudformation:GetTemplate",
+              "cloudformation:GetTemplateSummary",
+              "cloudformation:UpdateStack",
+              "cloudformation:UpdateTerminationProtection"
+            ]
+            Resource: "*"
+          - Sid: GetAndPassCopilotRoles
+            Effect: Allow
+            Action: [
+              "iam:GetRole",
+              "iam:PassRole"
+            ]
+            Resource: "*"
+          - Sid: ECR
+            Effect: Allow
+            Action: [
+              "ecr:BatchGetImage",
+              "ecr:BatchCheckLayerAvailability",
+              "ecr:CompleteLayerUpload",
+              "ecr:DescribeImages",
+              "ecr:DescribeRepositories",
+              "ecr:GetDownloadUrlForLayer",
+              "ecr:InitiateLayerUpload",
+              "ecr:ListImages",
+              "ecr:ListTagsForResource",
+              "ecr:PutImage",
+              "ecr:UploadLayerPart",
+              "ecr:GetAuthorizationToken"
+            ]
+            Resource: "*"
+          - Sid: ResourceGroups
+            Effect: Allow
+            Action: [
+              "resource-groups:GetGroup",
+              "resource-groups:GetGroupQuery",
+              "resource-groups:GetTags",
+              "resource-groups:ListGroupResources",
+              "resource-groups:ListGroups",
+              "resource-groups:SearchResources"
+            ]
+            Resource: "*"
+          - Sid: SSM
+            Effect: Allow
+            Action: [
+              "ssm:DeleteParameter",
+              "ssm:DeleteParameters",
+              "ssm:GetParameter",
+              "ssm:GetParameters",
+              "ssm:GetParametersByPath"
+            ]
+            Resource: "*"
+          - Sid: ELBv2
+            Effect: Allow
+            Action: [
+              "elasticloadbalancing:DescribeLoadBalancerAttributes",
+              "elasticloadbalancing:DescribeSSLPolicies",
+              "elasticloadbalancing:DescribeLoadBalancers",
+              "elasticloadbalancing:DescribeTargetGroupAttributes",
+              "elasticloadbalancing:DescribeListeners",
+              "elasticloadbalancing:DescribeTags",
+              "elasticloadbalancing:DescribeTargetHealth",
+              "elasticloadbalancing:DescribeTargetGroups",
+              "elasticloadbalancing:DescribeRules"
+            ]
+            Resource: "*"
+          - Sid: BuiltArtifactAccess
+            Effect: Allow
+            Action: [
+              "s3:ListBucketByTags",
+              "s3:GetLifecycleConfiguration",
+              "s3:GetBucketTagging",
+              "s3:GetInventoryConfiguration",
+              "s3:GetObjectVersionTagging",
+              "s3:ListBucketVersions",
+              "s3:GetBucketLogging",
+              "s3:ListBucket",
+              "s3:GetAccelerateConfiguration",
+              "s3:GetBucketPolicy",
+              "s3:GetObjectVersionTorrent",
+              "s3:GetObjectAcl",
+              "s3:GetEncryptionConfiguration",
+              "s3:GetBucketRequestPayment",
+              "s3:GetObjectVersionAcl",
+              "s3:GetObjectTagging",
+              "s3:GetMetricsConfiguration",
+              "s3:HeadBucket",
+              "s3:GetBucketPublicAccessBlock",
+              "s3:GetBucketPolicyStatus",
+              "s3:ListBucketMultipartUploads",
+              "s3:GetBucketWebsite",
+              "s3:ListJobs",
+              "s3:GetBucketVersioning",
+              "s3:GetBucketAcl",
+              "s3:GetBucketNotification",
+              "s3:GetReplicationConfiguration",
+              "s3:ListMultipartUploadParts",
+              "s3:GetObject",
+              "s3:GetObjectTorrent",
+              "s3:GetAccountPublicAccessBlock",
+              "s3:ListAllMyBuckets",
+              "s3:DescribeJob",
+              "s3:GetBucketCORS",
+              "s3:GetAnalyticsConfiguration",
+              "s3:GetObjectVersionForReplication",
+              "s3:GetBucketLocation",
+              "s3:GetObjectVersion",
+              "kms:Decrypt"
+            ]
+            Resource: "*"
+          - Sid: EC2
+            Effect: Allow
+            Action: [
+              "ec2:DescribeSubnets",
+              "ec2:DescribeSecurityGroups"
+            ]
+            Resource: "*"
+          - Sid: Tags
+            Effect: Allow
+            Action: [
+              "tag:GetResources"
+            ]
+            Resource: "*"
+          - Sid: ApplicationAutoscaling
+            Effect: Allow
+            Action: [
+              "application-autoscaling:DescribeScalingPolicies"
+            ]
+            Resource: "*"
+          - Sid: DeleteRoles
+            Effect: Allow
+            Action: [
+              "iam:DeleteRole",
+              "iam:ListRolePolicies",
+              "iam:DeleteRolePolicy"
+            ]
+            Resource:
+              - !GetAtt CloudformationExecutionRole.Arn
+              - !Sub "arn:aws:iam::${AWS::AccountId}:role/${AWS::StackName}-EnvManagerRole"
+          - Sid: DeleteEnvStack
+            Effect: Allow
+            Action:
+              - 'cloudformation:DescribeStacks'
+              - 'cloudformation:DeleteStack'
+            Resource:
+              - !Sub 'arn:aws:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}/*'
+  
+  CustomResourceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          -
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: /
+      Policies:
+        - PolicyName: "DNSandACMAccess"
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - "acm:ListCertificates"
+                  - "acm:RequestCertificate"
+                  - "acm:DescribeCertificate"
+                  - "acm:GetCertificate"
+                  - "acm:DeleteCertificate"
+                  - "acm:AddTagsToCertificate"
+                  - "route53:ListHostedZonesByName"
+                  - "sts:AssumeRole"
+                  - "logs:*"
+                  - "route53:ChangeResourceRecordSets"
+                  - "route53:ListResourceRecordSets"
+                  - "route53:Get*"
+                  - "route53:Describe*"
+                Resource:
+                  - "*"
+
+Outputs:
+  ExecutionRoleARN:
+    Description: ExecutionRole used by this application to set up ECR Repos, KMS Keys and S3 buckets
+    Value: !GetAtt ExecutionRole.Arn
+
+  AdministrationRoleARN:
+    Description: AdministrationRole used by this application to manage this application's StackSet
+    Value: !GetAtt AdministrationRole.Arn
+
+  EnvironmentSecurityGroup:
+    Value: !Ref EnvironmentSecurityGroup
+    Export:
+      Name: !Sub ${AWS::StackName}-EnvironmentSecurityGroup
+
+  EnvironmentManagerRoleARN:
+    Value: !GetAtt EnvironmentManagerRole.Arn
+    Description: The role to be assumed by the ecs-cli to manage environments.
+    Export:
+      Name: !Sub ${AWS::StackName}-EnvironmentManagerRoleARN
+
+  CFNExecutionRoleARN:
+    Value: !GetAtt CloudformationExecutionRole.Arn
+    Description: The role to be assumed by the Cloudformation service when it deploys application infrastructure.
+    Export:
+      Name: !Sub ${AWS::StackName}-CFNExecutionRoleARN
+
+  PublicLoadBalancerSecurityGroup:
+    Value: !Ref PublicLoadBalancerSecurityGroup
+    Export:
+      Name: !Sub "${PJPrefix}-${TagSuffix}SercurityGroup"

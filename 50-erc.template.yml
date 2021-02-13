@@ -1,0 +1,74 @@
+# Copyright 2019 Amazon.com, Inc. or its affiliates. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+AWSTemplateFormatVersion: 2010-09-09
+Description: Create ECR repository and deploy line
+
+Parameters:
+  PJPrefix:
+    Type: String
+
+  TagSuffix:
+    Type: String
+    Default: "cfn-create"
+
+Resources:
+  FrontECRRepofargate:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: front/fargate
+      Tags:
+        -
+          Key: Name
+          Value: !Sub "${PJPrefix}-${TagSuffix}-front"
+      RepositoryPolicyText:
+        Version: '2008-10-17'
+        Statement:
+        - Sid: AllowPushPull
+          Effect: Allow
+          Principal:
+              AWS:
+                - !Sub arn:aws:iam::${AWS::AccountId}:root
+                  #- arn:aws:iam::161428640121:root
+          Action:
+          - ecr:GetDownloadUrlForLayer
+          - ecr:BatchGetImage
+          - ecr:BatchCheckLayerAvailability
+          - ecr:PutImage
+          - ecr:InitiateLayerUpload
+          - ecr:UploadLayerPart
+          - ecr:CompleteLayerUpload
+
+  ApiECRRepofargate:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: api/fargate
+      Tags:
+        -
+          Key: Name
+          Value: !Sub "${PJPrefix}-${TagSuffix}-api"
+      RepositoryPolicyText:
+        Version: '2008-10-17'
+        Statement:
+        - Sid: AllowPushPull
+          Effect: Allow
+          Principal:
+              AWS:
+                - !Sub arn:aws:iam::${AWS::AccountId}:root
+                  #- arn:aws:iam::161428640121:root
+          Action:
+          - ecr:GetDownloadUrlForLayer
+          - ecr:BatchGetImage
+          - ecr:BatchCheckLayerAvailability
+          - ecr:PutImage
+          - ecr:InitiateLayerUpload
+          - ecr:UploadLayerPart
+          - ecr:CompleteLayerUpload
+
+Outputs:
+  FrontECRRepofargate:
+    Description: ECR Repo used to store images of the fargate service.
+    Value: !GetAtt FrontECRRepofargate.Arn
+
+  ApiECRRepofargate:
+    Description: ECR Repo used to store images of the fargate service.
+    Value: !GetAtt ApiECRRepofargate.Arn
