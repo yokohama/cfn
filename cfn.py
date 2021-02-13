@@ -5,7 +5,6 @@ import glob
 import json
 import re
 
-#PJ_HOLDER_PATH = '/Users/yokohama/projects/svc/cfn'
 PJ_HOLDER_PATH = './'
 PARAMS_FILE = PJ_HOLDER_PATH + '/params.cnf'
 
